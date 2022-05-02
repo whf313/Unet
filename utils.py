@@ -78,7 +78,7 @@ class Dice_Lossfn(torch.nn.Module):
         return d_loss
 
 
-def train_one_epoch(model, optimizer, data_loader, device):
+def train_one_epoch(model, optimizer, data_loader, device, lr_ratio = 0.5):
     accumulator = Accumulator()
     model.train()
     ce_Loss = torch.nn.CrossEntropyLoss()
@@ -100,7 +100,7 @@ def train_one_epoch(model, optimizer, data_loader, device):
         # loss = CE_Loss(pred, Y.type(torch.long)) + Dice_Loss(pred, Y)
         ce = ce_Loss(pred, y.type(torch.long))
         dice = dice_Loss(pred, y)
-        loss = ce + dice
+        loss = lr_ratio * ce + (1 - lr_ratio) * dice
 
         loss.backward()
         acc_loss += loss.detach()
@@ -116,7 +116,7 @@ def train_one_epoch(model, optimizer, data_loader, device):
     return acc_loss.item() / (step + 1), acc_CE.item() / (step + 1), acc_Dice.item() / (step + 1), accumulator.accuracy()
 
 
-def evaluate(model, data_loader, device):
+def evaluate(model, data_loader, device, lr_ratio = 0.5):
     model.eval()
     CE_Loss = torch.nn.CrossEntropyLoss()
     Dice_Loss = Dice_Lossfn()
@@ -137,7 +137,7 @@ def evaluate(model, data_loader, device):
         # loss = CE_Loss(pred, Y.type(torch.long)) + Dice_Loss(pred, Y)
         ce = CE_Loss(pred, y.type(torch.long))
         dice = Dice_Loss(pred, y)
-        loss = ce + dice
+        loss = lr_ratio * ce + (1 - lr_ratio) * dice
 
         acc_loss += loss.detach()
         acc_CE += ce.detach()
