@@ -56,25 +56,56 @@ def cal_IoU(pred, target):
     # num_union = target.numel()
     return num_intersection, num_union
 
+
+class Dice_Lossfn(torch.nn.Module):
+    def __init__(self):
+        super(Dice_Lossfn, self).__init__()
+
+    def forward(self, pred, target, smooth = 1e-5):
+        n, c, h, w = pred.size()
+        target[target != 0] = 1
+
+        temp_inputs = torch.softmax(pred.transpose(1, 2).transpose(2, 3).contiguous().view(n, -1, c), -1)    # shape=(n, h*w, c)
+        temp_target = target.view(n, -1)            # shape=(n, h*w)
+
+        tp = torch.sum(temp_target * temp_inputs[..., -1], axis=[0, 1])
+        fp = torch.sum(temp_inputs[..., -1], axis=[0, 1])
+        fn = torch.sum(temp_target, axis=[0, 1])
+
+        score = (2 * tp + smooth) / (fn + fp + smooth)
+        d_loss = 1 - torch.mean(score)
+
+        return d_loss
+
+
 def train_one_epoch(model, optimizer, data_loader, device):
     accumulator = Accumulator()
     model.train()
-    criterion = torch.nn.CrossEntropyLoss()
+    ce_Loss = torch.nn.CrossEntropyLoss()
+    dice_Loss = Dice_Lossfn()
     acc_loss = torch.zeros(1).to(device)
-    #optimizer.zero_grad()
+
+    acc_CE = torch.zeros(1).to(device)
+    acc_Dice = torch.zeros(1).to(device)
 
     data_loader = tqdm(data_loader)
     for step, data in enumerate(data_loader):
-        X, Y = data
-        X, Y = X.to(device), Y.to(device)
+        x, y = data
+        x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
 
-        pred = model(X)
-        accumulator.add(cal_IoU(pred, Y))
+        pred = model(x)
+        accumulator.add(cal_IoU(pred, y))
 
-        loss = criterion(pred, Y.type(torch.long))
+        # loss = CE_Loss(pred, Y.type(torch.long)) + Dice_Loss(pred, Y)
+        ce = ce_Loss(pred, y.type(torch.long))
+        dice = dice_Loss(pred, y)
+        loss = ce + dice
+
         loss.backward()
         acc_loss += loss.detach()
+        acc_CE += ce.detach()
+        acc_Dice += dice.detach()
 
         if not torch.isfinite(loss):
             print('WARNING: non-finite loss, ending training ', loss)
@@ -82,14 +113,18 @@ def train_one_epoch(model, optimizer, data_loader, device):
 
         optimizer.step()
 
-    return acc_loss.item() / (step + 1), accumulator.accuracy()
+    return acc_loss.item() / (step + 1), acc_CE.item() / (step + 1), acc_Dice.item() / (step + 1), accumulator.accuracy()
 
 
 def evaluate(model, data_loader, device):
     model.eval()
-    criterion = torch.nn.CrossEntropyLoss()
+    CE_Loss = torch.nn.CrossEntropyLoss()
+    Dice_Loss = Dice_Lossfn()
     accumulator = Accumulator()
     acc_loss = torch.zeros(1).to(device)
+
+    acc_CE = torch.zeros(1).to(device)
+    acc_Dice = torch.zeros(1).to(device)
 
     data_loader = tqdm(data_loader)
     for step, data in enumerate(data_loader):
@@ -99,10 +134,16 @@ def evaluate(model, data_loader, device):
             pred = model(x)
         accumulator.add(cal_IoU(pred, y))
 
-        loss = criterion(pred, y.type(torch.long))
-        acc_loss += loss.detach()
+        # loss = CE_Loss(pred, Y.type(torch.long)) + Dice_Loss(pred, Y)
+        ce = CE_Loss(pred, y.type(torch.long))
+        dice = Dice_Loss(pred, y)
+        loss = ce + dice
 
-    return acc_loss.item() / (step + 1), accumulator.accuracy()
+        acc_loss += loss.detach()
+        acc_CE += ce.detach()
+        acc_Dice += dice.detach()
+
+    return acc_loss.item() / (step + 1), acc_CE.item() / (step + 1), acc_Dice.item() / (step + 1), accumulator.accuracy()
 
 
 if __name__ == "__main__":
@@ -136,17 +177,40 @@ if __name__ == "__main__":
                        [1, 1, 0, 1, 1]],
                       [[0, 0, 1, 0, 0],
                       [0, 1, 1, 1, 0],
-                      [1, 1, 0, 1, 1],
-                      [0, 1, 1, 1, 0],
-                      [0, 0, 1, 0, 0]]]).unsqueeze(0)
-
-    y = torch.tensor([[0, 0, 1, 0, 1],
-                      [0, 1, 1, 1, 0],
                       [1, 1, 1, 1, 1],
                       [0, 1, 1, 1, 0],
-                      [0, 1, 1, 0, 0]]).unsqueeze(0)
+                      [0, 0, 1, 0, 0]]], dtype=torch.float32, requires_grad=True).unsqueeze(0)
+
+    conv = torch.nn.Conv2d(2, 2, kernel_size=3, padding=1)
+
+
+    y = torch.tensor([[0, 0, 0, 0, 0],
+                      [0, 0, 1, 0, 0],
+                      [0, 0, 1, 0, 0],
+                      [0, 0, 0, 0, 0],
+                      [0, 0, 0, 0, 0]], dtype=torch.float32, requires_grad=True).unsqueeze(0)
+
+    x = torch.randn([8, 2, 5, 5])
+    x[x<0] = 0
+    y = torch.randn([8, 5, 5])
+    y[y < 0] = 0
     print(x.shape, y.shape)
-    a,b = cal_IoU(x, y)
-    print(a, b)
+    print(cal_IoU(x, y))
+    dice_loss = Dice_Lossfn()
+    #dice_loss = torch.nn.CrossEntropyLoss()
+    temp = conv(x)
+    print(conv.weight.grad)
+    loss = dice_loss(temp, y.type(torch.long))
+    loss.backward()
+    print(loss)
+    print(conv.weight.grad)
+
+    y = torch.tensor([[0, 0, 0, 0, 0],
+                      [0, 0, 0.2, 0, 0],
+                      [0.7, 0, 0.5, 0, 0],
+                      [0, 0, 0, 0, 0],
+                      [0, 0, 0, 0, 0.3]])
+
+    y[y!=0] = 1
 
 
