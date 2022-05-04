@@ -42,17 +42,17 @@ config = {
     },
     "n_epochs" : 300,
     'optim_hparas': {                # hyper-parameters for the optimizer (depends on which optimizer you are using)
-        'lr': 5e-2,                 # learning rate of SGD
+        'lr': 5e-3,                 # learning rate of SGD
         'momentum': 0.9,              # momentum for SGD
         "weight_decay" : 1e-4
     },
-    "warmup" : 10,
+    "warmup" : 20,
     "save_path" : "./model"
 }
 
 def lr_lambda(epoch):
     # warmup
-    if epoch <= config["warmup"]:
+    if epoch < config["warmup"]:
         return epoch / config["warmup"]
     else:
         return (0.2) ** ((epoch - config["warmup"]) // 40)
@@ -94,12 +94,14 @@ def train(config):
         train_loss, ce_loss, dice_loss, train_mIoU = train_one_epoch(model=model,
                                                                      optimizer=optimizer,
                                                                      data_loader=train_loader,
-                                                                     device=device)
+                                                                     device=device,
+                                                                     lr_ratio=0.5)
 
         # validate
         val_loss, ce_loss, dice_loss, val_mIoU = evaluate(model=model,
                                                           data_loader=test_loader,
-                                                          device=device)
+                                                          device=device,
+                                                          lr_ratio=0.5)
 
         tags = ["train_loss", "CE_Loss", "Dice_Loss", "train_mIoU", "val_loss", "val_mIoU", "lr"]
         tb_writer.add_scalar(tags[0], train_loss, epoch)
